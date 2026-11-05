@@ -235,17 +235,56 @@ pub struct CloudScope {
     pub body_chars: u64,
     pub sample_paths: Vec<String>,
     pub payload_preview: String,
+    /// Paths under version-control metadata that were dropped from the upload.
+    pub excluded_vcs: u64,
+}
+
+/// Version-control bookkeeping directories. Their content is never useful for
+/// a directory summary, and uploading it leaks commit objects, hooks and
+/// authentication helpers, so the cloud scope drops them by default.
+const VCS_METADATA_DIRS: &[&str] = &[".git", ".svn", ".hg", ".bzr", ".jj", "_darcs", "CVS"];
+
+pub fn is_vcs_metadata(path: &str) -> bool {
+    path.split('/')
+        .any(|component| VCS_METADATA_DIRS.contains(&component))
+}
+
+/// SQL counterpart of `is_vcs_metadata`, so the LIMIT applies to eligible
+/// rows instead of being consumed by `.git` objects. `instr` is a literal
+/// substring match, which avoids `LIKE` wildcards (`_darcs` contains `_`).
+fn vcs_predicate(include: bool) -> String {
+    let terms: Vec<String> = VCS_METADATA_DIRS
+        .iter()
+        .map(|dir| format!("instr(path,'/{dir}/')>0"))
+        .collect();
+    let joined = terms.join(" OR ");
+    if include {
+        format!("({joined})")
+    } else {
+        format!("NOT ({joined})")
+    }
 }
 
 pub fn cloud_scope(conn: &Connection, path: &str, max_files: usize) -> Result<CloudScope> {
     let prefix = format!("{}/", path.trim_end_matches('/'));
     let upper = format!("{}/{}", path.trim_end_matches('/'), '\u{10FFFF}');
-    let mut statement = conn.prepare(
-        "SELECT path, size FROM files
-         WHERE status='online' AND is_dir=0 AND size<=524288
-           AND ((path>=?1 AND path<?2) OR path=?3)
-         ORDER BY size DESC LIMIT ?4",
+    // Version-control metadata is excluded in SQL so `.git/HEAD` and friends
+    // never reach the scope preview or occupy the file limit.
+    let scope_where = "status='online' AND is_dir=0 AND size<=524288
+           AND ((path>=?1 AND path<?2) OR path=?3)";
+    let excluded_vcs: u64 = conn.query_row(
+        &format!(
+            "SELECT COUNT(*) FROM files WHERE {scope_where} AND {}",
+            vcs_predicate(true)
+        ),
+        params![prefix, upper, path.trim_end_matches('/')],
+        |row| Ok(row.get::<_, i64>(0)?.max(0) as u64),
     )?;
+    let mut statement = conn.prepare(&format!(
+        "SELECT path, size FROM files WHERE {scope_where} AND {}
+         ORDER BY size DESC LIMIT ?4",
+        vcs_predicate(false)
+    ))?;
     let mut rows = statement.query(params![
         prefix,
         upper,
@@ -255,7 +294,13 @@ pub fn cloud_scope(conn: &Connection, path: &str, max_files: usize) -> Result<Cl
     let mut paths = Vec::new();
     let mut bytes = 0u64;
     while let Some(row) = rows.next()? {
-        paths.push(row.get::<_, String>(0)?);
+        let row_path: String = row.get(0)?;
+        // The SQL predicate already dropped these; keep the check as a second
+        // gate so the Rust and SQL lists cannot silently drift apart.
+        if is_vcs_metadata(&row_path) {
+            continue;
+        }
+        paths.push(row_path);
         bytes += row.get::<_, i64>(1)?.max(0) as u64;
     }
     let mut payload = String::new();
@@ -270,6 +315,7 @@ pub fn cloud_scope(conn: &Connection, path: &str, max_files: usize) -> Result<Cl
         body_chars: payload.chars().count() as u64,
         sample_paths: paths,
         payload_preview: payload,
+        excluded_vcs,
     })
 }
 
@@ -320,5 +366,59 @@ mod tests {
         assert_eq!(ext_of("main.rs"), "rs");
         assert_eq!(ext_of(".gitignore"), "(none)");
         assert_eq!(ext_of("Makefile"), "(none)");
+    }
+
+    #[test]
+    fn vcs_metadata_detection() {
+        assert!(is_vcs_metadata("/work/repo/.git/HEAD"));
+        assert!(is_vcs_metadata("/work/repo/.svn/entries"));
+        assert!(is_vcs_metadata("/work/repo/.hg/store/data"));
+        assert!(is_vcs_metadata("/work/repo/old/CVS/Entries"));
+        assert!(!is_vcs_metadata("/work/repo/.gitignore"));
+        assert!(!is_vcs_metadata("/work/repo/git/notes.md"));
+    }
+
+    fn scope_db() -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("scope.db");
+        let conn = crate::db::open_rw(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE files (
+                 id TEXT PRIMARY KEY, path TEXT NOT NULL, size INTEGER NOT NULL,
+                 status TEXT NOT NULL, is_dir INTEGER NOT NULL, volume_id TEXT NOT NULL
+             );",
+        )
+        .unwrap();
+        let rows = [
+            ("/work/repo/main.rs", 120u64),
+            ("/work/repo/README.md", 300),
+            ("/work/repo/.git/HEAD", 21),
+            ("/work/repo/.git/config", 400),
+            ("/work/repo/.git/objects/pack/a.pack", 9000),
+            ("/work/repo/.svn/entries", 50),
+            ("/work/repo/sub/.hg/store/data/x.i", 64),
+        ];
+        for (index, (path, size)) in rows.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO files (id, path, size, status, is_dir, volume_id)
+                 VALUES (?1,?2,?3,'online',0,'v1')",
+                params![format!("f{index}"), path, *size as i64],
+            )
+            .unwrap();
+        }
+        (dir, conn)
+    }
+
+    #[test]
+    fn cloud_scope_excludes_vcs_metadata() {
+        let (_dir, conn) = scope_db();
+        let scope = cloud_scope(&conn, "/work/repo", 20).unwrap();
+        assert_eq!(scope.files, 2);
+        assert_eq!(scope.excluded_vcs, 5);
+        assert_eq!(scope.body_bytes, 420);
+        assert!(!scope.payload_preview.contains(".git/"));
+        assert!(!scope.payload_preview.contains(".svn/"));
+        assert!(!scope.payload_preview.contains(".hg/"));
+        assert!(scope.payload_preview.contains("main.rs"));
     }
 }

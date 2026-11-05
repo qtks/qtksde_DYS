@@ -250,8 +250,12 @@ fn main() {
             };
             // The scope is printed before anything is sent, always.
             eprintln!(
-                "UPLOAD SCOPE: {} files, {} bytes, payload {} chars\n{}",
-                scope.files, scope.body_bytes, scope.body_chars, scope.payload_preview
+                "UPLOAD SCOPE: {} files, {} bytes, payload {} chars, {} VCS-metadata paths excluded\n{}",
+                scope.files,
+                scope.body_bytes,
+                scope.body_chars,
+                scope.excluded_vcs,
+                scope.payload_preview
             );
             let endpoint = flag(rest, "--endpoint").unwrap_or_default();
             let model = flag(rest, "--model").unwrap_or_else(|| "gpt-4o-mini".to_string());
