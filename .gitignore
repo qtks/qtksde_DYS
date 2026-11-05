@@ -3,5 +3,6 @@
 /.synthetic
 /ui/node_modules
 /ui/dist
+/ui/*.tsbuildinfo
 /src-tauri/target
 /src-tauri/gen
