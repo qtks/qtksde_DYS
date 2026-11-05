@@ -118,27 +118,40 @@ pub fn find_duplicates(conn: &Connection, options: &DuplicateOptions) -> Result<
 
     let volume_clause = " AND (?1 IS NULL OR f.volume_id = ?1)";
 
-    let total_online_files: u64 = conn.query_row(
+    // One pass for the online census (including the zero-byte count), one pass
+    // for the non-online census. The old code ran four separate scans here;
+    // on a cold 1M-row index that alone cost seconds.
+    let (total_online_files, empty_files): (u64, u64) = conn.query_row(
         &format!(
-            "SELECT COUNT(*) FROM files f JOIN volumes v ON v.id=f.volume_id AND v.status='online'
+            "SELECT COUNT(*), COALESCE(SUM(CASE WHEN f.size=0 THEN 1 ELSE 0 END),0)
+             FROM files f JOIN volumes v ON v.id=f.volume_id AND v.status='online'
              WHERE f.is_dir=0 AND f.status='online'{}",
             volume_clause
         ),
         params![volume],
-        |row| row.get::<_, i64>(0),
-    )? as u64;
+        |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
+    )?;
 
     let (skipped_offline, skipped_missing): (u64, u64) = conn.query_row(
         &format!(
             "SELECT
                 COALESCE(SUM(CASE WHEN f.status='offline' THEN 1 ELSE 0 END),0),
                 COALESCE(SUM(CASE WHEN f.status='missing' THEN 1 ELSE 0 END),0)
-             FROM files f WHERE f.is_dir=0{}",
+             FROM files f WHERE f.is_dir=0 AND f.status<>'online'{}",
             volume_clause
         ),
         params![volume],
         |row| Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64)),
     )?;
+
+    // Zero-byte files are pre-filtered out of the funnel by default: a cold
+    // run over a tree full of them paid one open() per file to rediscover that
+    // empty files carry no content. `include_empty` keeps them on purpose.
+    let size_filter = if options.include_empty {
+        ""
+    } else {
+        " AND f.size > 0"
+    };
 
     // Size buckets. A full scan over `files` is the price of the first funnel
     // stage; the rows read here are only (size, count).
@@ -146,10 +159,11 @@ pub fn find_duplicates(conn: &Connection, options: &DuplicateOptions) -> Result<
         let mut statement = conn.prepare(&format!(
             "SELECT f.size, COUNT(*) FROM files f
              JOIN volumes v ON v.id=f.volume_id AND v.status='online'
-             WHERE f.is_dir=0 AND f.status='online' AND f.size > 0{}
+             WHERE f.is_dir=0 AND f.status='online'{} {}
              GROUP BY f.size HAVING COUNT(*)>1
              ORDER BY f.size * (COUNT(*)-1) DESC",
-            volume_clause
+            volume_clause.trim_end(),
+            size_filter
         ))?;
         let mapped = statement.query_map(params![volume], |row| {
             Ok((
@@ -160,17 +174,11 @@ pub fn find_duplicates(conn: &Connection, options: &DuplicateOptions) -> Result<
         mapped.collect::<std::result::Result<Vec<_>, _>>()?
     };
 
-    let mut skipped_empty_files = 0u64;
-    if !options.include_empty {
-        skipped_empty_files = conn.query_row(
-            &format!(
-                "SELECT COUNT(*) FROM files f WHERE f.is_dir=0 AND f.size=0{}",
-                volume_clause
-            ),
-            params![volume],
-            |row| row.get::<_, i64>(0),
-        )? as u64;
-    }
+    let skipped_empty_files = if options.include_empty {
+        0
+    } else {
+        empty_files
+    };
 
     let mut duplicate_groups: Vec<DuplicateGroup> = Vec::new();
     let mut partial_hashed = 0u64;

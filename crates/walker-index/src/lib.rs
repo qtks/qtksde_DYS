@@ -6,7 +6,7 @@ mod timeutil;
 mod volume;
 mod work;
 
-pub use db::IndexDb;
+pub use db::{IndexDb, SCHEMA_SQL};
 pub use error::IndexError;
 pub use indexer::index_root;
 pub use model::{
