@@ -89,9 +89,7 @@ watch(() => props.path, (path) => load(path), { immediate: true })
 
     <p v-if="error" class="error">{{ error }}</p>
     <p v-if="loading" class="note">加载中…</p>
-    <p v-if="data && data.bytes === 0" class="note">
-      当前目录占用为 0（M1 合成数据集的目录多为空文件），Treemap 无面积可比。
-    </p>
+    <p v-if="data && data.bytes === 0" class="note">当前目录没有可展示的条目。</p>
 
     <svg v-if="!loading" class="treemap" :viewBox="`0 0 ${WIDTH} ${HEIGHT}`" preserveAspectRatio="none">
       <g v-for="cell in cells" :key="cell.row.id">

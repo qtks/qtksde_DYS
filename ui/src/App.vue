@@ -18,8 +18,10 @@ const selectedPath = ref<string | null>(null)
 const tab = ref<'browse' | 'duplicates'>('browse')
 const error = ref<string | null>(null)
 const errorDetail = ref<string | null>(null)
+const loaded = ref(false)
 
 const activeVolume = computed(() => volumes.value.find((volume) => volume.id === activeVolumeId.value))
+const empty = computed(() => loaded.value && !error.value && volumes.value.length === 0)
 
 async function loadVolumes() {
   try {
@@ -36,6 +38,8 @@ async function loadVolumes() {
     // parse an exception to know what to do next.
     error.value = '索引服务未响应，请重试。'
     errorDetail.value = String(reason)
+  } finally {
+    loaded.value = true
   }
 }
 
@@ -85,7 +89,17 @@ onMounted(loadVolumes)
       <small v-if="errorDetail">（技术细节：{{ errorDetail }}）</small>
     </div>
 
-    <main class="layout">
+    <section v-if="empty" class="empty-state" role="status">
+      <h2>还没有扫描任何卷</h2>
+      <p>索引库是空的，所以目录树、搜索和 Treemap 都没有内容可显示。</p>
+      <p>先在终端运行一次扫描，然后重启 Panopticon：</p>
+      <pre><code>walker-index scan --db ~/.local/share/panopticon/index.db /path/to/scan</code></pre>
+      <p class="note">
+        默认索引库：~/.local/share/panopticon/index.db（可用 XDG_DATA_HOME 或 PANOPTICON_DB 覆盖）
+      </p>
+    </section>
+
+    <main v-else class="layout">
       <SearchPanel class="column left" />
 
       <div class="column right">
@@ -116,3 +130,38 @@ onMounted(loadVolumes)
     </footer>
   </div>
 </template>
+
+<style scoped>
+.empty-state {
+  max-width: 640px;
+  margin: 48px auto;
+  padding: 28px 32px;
+  border: 1px solid #2b394a;
+  border-radius: 12px;
+  background: #111a24;
+  color: #dbe7f3;
+}
+
+.empty-state h2 {
+  margin: 0 0 12px;
+  font-size: 20px;
+}
+
+.empty-state p {
+  margin: 8px 0;
+  line-height: 1.6;
+}
+
+.empty-state pre {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #0a1119;
+  overflow-x: auto;
+}
+
+.empty-state .note {
+  color: #8aa0b8;
+  font-size: 13px;
+}
+</style>

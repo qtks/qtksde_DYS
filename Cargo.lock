@@ -1515,7 +1515,7 @@ dependencies = [
 
 [[package]]
 name = "walker-ai"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "infer",
@@ -1535,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "walker-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "rayon",
@@ -1548,7 +1548,7 @@ dependencies = [
 
 [[package]]
 name = "walker-index"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rusqlite",
  "serde",
@@ -1561,7 +1561,7 @@ dependencies = [
 
 [[package]]
 name = "walker-query"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "rusqlite",
@@ -1575,7 +1575,7 @@ dependencies = [
 
 [[package]]
 name = "walker-scan"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
  "walker-core",

@@ -2217,7 +2217,7 @@ dependencies = [
 
 [[package]]
 name = "panopticon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
  "tauri",
@@ -3824,7 +3824,7 @@ dependencies = [
 
 [[package]]
 name = "walker-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rayon",
  "serde",
@@ -3834,7 +3834,7 @@ dependencies = [
 
 [[package]]
 name = "walker-index"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rusqlite",
  "serde",
@@ -3846,7 +3846,7 @@ dependencies = [
 
 [[package]]
 name = "walker-query"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "rusqlite",

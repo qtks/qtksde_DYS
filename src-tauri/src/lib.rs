@@ -9,10 +9,133 @@ use std::time::{Duration, Instant};
 
 use tauri::Manager;
 
+const APP_DATA_DIR: &str = "panopticon";
+
+/// Fixed default location: `$XDG_DATA_HOME/panopticon/index.db`, falling back
+/// to `~/.local/share/panopticon/index.db`. A relative `index.db` used to
+/// depend on the working directory, so the same user could open different
+/// (empty) databases from a launcher and a terminal.
+fn default_db_path(xdg: Option<PathBuf>, home: Option<PathBuf>, cwd: &Path) -> PathBuf {
+    let base = match xdg {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => match home {
+            Some(home) => home.join(".local").join("share"),
+            None => cwd.to_path_buf(),
+        },
+    };
+    base.join(APP_DATA_DIR).join("index.db")
+}
+
+/// Where the pre-XDG build may have left an index: the launch directory, plus
+/// `$HOME` because desktop launchers commonly run the binary from there.
+fn legacy_candidates(cwd: &Path, home: Option<&Path>, target: &Path) -> Vec<PathBuf> {
+    let mut candidates = vec![cwd.join("index.db")];
+    if let Some(home) = home {
+        candidates.push(home.join("index.db"));
+    }
+    candidates.retain(|path| path != target && path.is_file());
+    candidates
+}
+
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(metadata) = std::fs::metadata(path) {
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(mode);
+        let _ = std::fs::set_permissions(path, permissions);
+    }
+}
+
+#[cfg(not(unix))]
+fn set_mode(_path: &Path, _mode: u32) {}
+
+/// Create (if needed) and tighten the app's own data directory to 0700.
+fn prepare_private_dir(dir: &Path) {
+    if let Err(error) = std::fs::create_dir_all(dir) {
+        eprintln!("could not create {}: {error}", dir.display());
+        return;
+    }
+    set_mode(dir, 0o700);
+}
+
+fn copy_legacy_index(legacy: &Path, target: &Path) -> std::io::Result<()> {
+    std::fs::copy(legacy, target)?;
+    // Un-checkpointed writes live in the -wal sidecar; copy it too.
+    let legacy_wal = with_suffix(legacy, "-wal");
+    if legacy_wal.is_file() {
+        let target_wal = with_suffix(target, "-wal");
+        std::fs::copy(&legacy_wal, &target_wal)?;
+        set_mode(&target_wal, 0o600);
+    }
+    set_mode(target, 0o600);
+    Ok(())
+}
+
+/// Move the default database to the XDG location the first time the new build
+/// runs. The original file is copied, never removed.
+fn prepare_default_db(target: &Path, cwd: &Path, home: Option<&Path>) {
+    if let Some(parent) = target.parent() {
+        prepare_private_dir(parent);
+    }
+    if target.exists() {
+        set_mode(target, 0o600);
+        return;
+    }
+    for legacy in legacy_candidates(cwd, home, target) {
+        match copy_legacy_index(&legacy, target) {
+            Ok(()) => {
+                eprintln!(
+                    "index: copied existing database {} -> {} (original kept)",
+                    legacy.display(),
+                    target.display()
+                );
+                return;
+            }
+            Err(error) => eprintln!(
+                "index: could not copy {} -> {}: {error}",
+                legacy.display(),
+                target.display()
+            ),
+        }
+    }
+}
+
+fn db_path_from(
+    override_path: Option<PathBuf>,
+    xdg: Option<PathBuf>,
+    home: Option<PathBuf>,
+    cwd: &Path,
+) -> PathBuf {
+    override_path.unwrap_or_else(|| default_db_path(xdg, home, cwd))
+}
+
 fn backend_db() -> PathBuf {
-    std::env::var_os("PANOPTICON_DB")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("index.db"))
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let override_path = std::env::var_os("PANOPTICON_DB").map(PathBuf::from);
+    let target = db_path_from(
+        override_path.clone(),
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
+        home.clone(),
+        &cwd,
+    );
+    if override_path.is_some() {
+        if let Some(parent) = target.parent() {
+            if !parent.as_os_str().is_empty() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+        return target;
+    }
+    prepare_default_db(&target, &cwd, home.as_deref());
+    target
 }
 
 /// Prefer 8787, but if another process owns it (a CLI `walker-query serve`,
@@ -52,11 +175,15 @@ fn ui_dir(app: &tauri::App) -> PathBuf {
 /// the file merely exists is how the old build left users on
 /// "no such table: dir_totals".
 fn ensure_index(db: &Path) {
-    if let Err(error) = walker_index::IndexDb::open(db) {
-        eprintln!(
-            "could not migrate {}: {error}; index queries will fail until this is fixed",
-            db.display()
-        );
+    match walker_index::IndexDb::open(db) {
+        Ok(_) => set_mode(db, 0o600),
+        Err(error) => {
+            set_mode(db, 0o600);
+            eprintln!(
+                "could not migrate {}: {error}; index queries will fail until this is fixed",
+                db.display()
+            );
+        }
     }
 }
 
@@ -134,4 +261,125 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("panopticon-lib-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    #[cfg(unix)]
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).expect("metadata").permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn xdg_data_home_wins_over_the_working_directory() {
+        let path = default_db_path(
+            Some(PathBuf::from("/data")),
+            Some(PathBuf::from("/home/user")),
+            Path::new("/work"),
+        );
+        assert_eq!(path, PathBuf::from("/data/panopticon/index.db"));
+    }
+
+    #[test]
+    fn falls_back_to_home_local_share() {
+        let path = default_db_path(None, Some(PathBuf::from("/home/user")), Path::new("/work"));
+        assert_eq!(
+            path,
+            PathBuf::from("/home/user/.local/share/panopticon/index.db")
+        );
+    }
+
+    #[test]
+    fn empty_xdg_is_treated_as_unset() {
+        let path = default_db_path(
+            Some(PathBuf::new()),
+            Some(PathBuf::from("/home/user")),
+            Path::new("/work"),
+        );
+        assert_eq!(
+            path,
+            PathBuf::from("/home/user/.local/share/panopticon/index.db")
+        );
+    }
+
+    #[test]
+    fn panopticon_db_override_wins() {
+        let path = db_path_from(
+            Some(PathBuf::from("/custom/index.db")),
+            Some(PathBuf::from("/data")),
+            Some(PathBuf::from("/home/user")),
+            Path::new("/work"),
+        );
+        assert_eq!(path, PathBuf::from("/custom/index.db"));
+    }
+
+    #[test]
+    fn legacy_database_is_copied_and_the_original_kept() {
+        let root = scratch("legacy");
+        let cwd = root.join("cwd");
+        let home = root.join("home");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&home).expect("home");
+        let legacy = cwd.join("index.db");
+        fs::write(&legacy, b"legacy-bytes").expect("legacy db");
+
+        let target = default_db_path(None, Some(home.clone()), &cwd);
+        prepare_default_db(&target, &cwd, Some(&home));
+
+        assert_eq!(fs::read(&target).expect("target"), b"legacy-bytes");
+        assert!(legacy.is_file(), "the original database must be kept");
+        #[cfg(unix)]
+        {
+            assert_eq!(mode(target.parent().expect("parent")), 0o700);
+            assert_eq!(mode(&target), 0o600);
+        }
+    }
+
+    #[test]
+    fn migrated_legacy_database_opens_at_the_current_schema() {
+        let root = scratch("schema");
+        let cwd = root.join("cwd");
+        let home = root.join("home");
+        fs::create_dir_all(&cwd).expect("cwd");
+        fs::create_dir_all(&home).expect("home");
+
+        // Simulate the v0.1.0 database: current schema minus the migrations.
+        let legacy = cwd.join("index.db");
+        let db = walker_index::IndexDb::open(&legacy).expect("create legacy db");
+        db.connection()
+            .execute_batch("DROP TABLE dir_totals; PRAGMA user_version=0;")
+            .expect("downgrade fixture");
+        drop(db);
+
+        let target = default_db_path(None, Some(home.clone()), &cwd);
+        prepare_default_db(&target, &cwd, Some(&home));
+
+        let migrated = walker_index::IndexDb::open(&target).expect("migrate copied database");
+        let version: i64 = migrated
+            .connection()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user_version");
+        assert_eq!(version as u32, walker_index::SCHEMA_VERSION);
+        let dir_totals: i64 = migrated
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='dir_totals'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("sqlite_master");
+        assert_eq!(dir_totals, 1);
+    }
 }
