@@ -1,0 +1,11 @@
+[package]
+name = "walker-scan"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Panopticon M0 scan CLI"
+
+[dependencies]
+walker-core = { path = "../walker-core" }
+serde_json.workspace = true

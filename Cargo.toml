@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/walker-core", "crates/walker-scan"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2.5"
+rayon = "1.10"
+unicode-normalization = "0.1"
+tempfile = "3"
+criterion = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+
+[profile.bench]
+inherits = "release"
