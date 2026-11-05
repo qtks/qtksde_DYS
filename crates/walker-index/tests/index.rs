@@ -460,15 +460,19 @@ fn aborted_scan_resumes_from_checkpoint() {
     );
 
     let db = IndexDb::open(&db_path).unwrap();
-    let status: String = db
+    let (status, work_file): (String, String) = db
         .connection()
         .query_row(
-            "SELECT status FROM scan_sessions ORDER BY rowid DESC LIMIT 1",
+            "SELECT status, work_file FROM scan_sessions ORDER BY rowid DESC LIMIT 1",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
     assert_eq!(status, "completed");
+    assert!(
+        !Path::new(&work_file).exists(),
+        "completed sessions drop their crash-resume work file"
+    );
 }
 
 #[test]

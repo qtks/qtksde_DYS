@@ -162,6 +162,15 @@ pub fn index_root(options: &IndexOptions) -> Result<IndexOutcome, IndexError> {
     stats.write_ms += elapsed_ms(checkpoint_start);
     stats.total_ms = elapsed_ms(total_start);
 
+    // The work files only exist to survive a crash between batches; once the
+    // session is committed they are dead weight (~100 MB per 1M entries).
+    for path in [session.work_file.as_ref(), session.dirs_file.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        let _ = fs::remove_file(path);
+    }
+
     Ok(IndexOutcome {
         volume,
         session_id: session.id,
