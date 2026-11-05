@@ -123,7 +123,11 @@ jobs:
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
-        timeout-minutes: 15
+        # The 22.04 image does not preinstall webkit2gtk-4.1, so the install
+        # pulls ~120 packages (~60 MB). On the Azure mirror that can take
+        # well over 15 minutes; timing out mid-download fails the build even
+        # though nothing is wrong with the package.
+        timeout-minutes: 40
         run: |
           # The runner image ships most of these; install only what is missing.
           # A bare `apt-get update` can hang on a slow mirror, so it gets a hard
