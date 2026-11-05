@@ -100,13 +100,24 @@ jobs:
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf libssl-dev
-          # Needed by AppImage tooling; the t64 name exists on 24.04+.
-          sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2 || true
+          # The runner image ships most of these; install only what is missing.
+          # A bare `apt-get update` can hang on a slow mirror, so it gets a hard
+          # timeout and the pre-populated package lists are used as a fallback.
+          pkgs="libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf"
+          missing=""
+          for p in $pkgs; do
+            dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
+          done
+          if [ -z "$missing" ]; then
+            echo "all system dependencies already installed"
+            exit 0
+          fi
+          echo "installing:$missing"
+          sudo apt-get update -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 || true
+          sudo apt-get install -y --no-install-recommends $missing
 
       - name: Install UI dependencies
         run: npm --prefix ui ci
