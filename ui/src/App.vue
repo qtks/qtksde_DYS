@@ -95,7 +95,8 @@ onMounted(loadVolumes)
       <p>先在终端运行一次扫描，然后重启 Panopticon：</p>
       <pre><code>walker-index scan --db ~/.local/share/panopticon/index.db /path/to/scan</code></pre>
       <p class="note">
-        默认索引库：~/.local/share/panopticon/index.db（可用 XDG_DATA_HOME 或 PANOPTICON_DB 覆盖）
+        walker-index 随 deb/rpm 安装包一起安装，直接在终端即可执行。默认索引库：
+        ~/.local/share/panopticon/index.db（可用 XDG_DATA_HOME 或 PANOPTICON_DB 覆盖）
       </p>
     </section>
 

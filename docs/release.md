@@ -2,10 +2,11 @@
 
 ## 1. 版本号
 
-一次发布需要同步三处版本：
+一次发布需要同步四处版本：
 
 | 文件 | 字段 |
 | --- | --- |
+| `Cargo.toml` | `[workspace.package] version` |
 | `src-tauri/tauri.conf.json` | `version` |
 | `src-tauri/Cargo.toml` | `[package] version` |
 | `ui/package.json` | `version` |
@@ -30,12 +31,17 @@ git push origin v0.1.0
 | Job | Runner | 产物 |
 | --- | --- | --- |
 | `check` | ubuntu-latest | `cargo fmt --check`、`clippy -D warnings`、`cargo test --workspace` |
-| `bundle linux-x64` | ubuntu-latest | `.deb`、`.rpm`、`.AppImage` |
+| `bundle linux-x64` | ubuntu-22.04 | `.deb`、`.rpm`、`.AppImage` |
 | `bundle windows-x64` | windows-latest | `.msi`、`-setup.exe`（NSIS） |
-| `bundle macos-arm64` | macos-14 | `.dmg`、`.app` |
+| `bundle macos-arm64` | macos-15 | `.dmg`、`.app` |
 | `bundle macos-x64` | macos-15-intel | `.dmg`、`.app` |
 
 - PR 与功能分支只跑 `check`，不消耗 macOS 分钟数，也不产出安装包。
+- Linux 固定在 `ubuntu-22.04`（glibc 2.35）：`ubuntu-latest`（24.04）产出的二进制会引用
+  `GLIBC_2.39` 符号，在 Debian 12 / Ubuntu 22.04 上无法启动。
+- `walker-index` 作为 Tauri sidecar（`bundle.externalBin`）随包安装：CI 按 matrix `target`
+  构建后复制为 `src-tauri/binaries/walker-index-<target-triple>[.exe]`；本地打包同样需要
+  先执行这一步（该目录不入库）。
 - `concurrency` 按 `workflow + ref` 取消旧任务；tag 构建失败时先看失败平台的日志，`RUST_BACKTRACE=1` 已开启。
 - artifact 名称为 `panopticon-<平台>`，保留 14 天。Release 会合并四个 artifact 后上传。
 

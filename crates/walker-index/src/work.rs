@@ -38,10 +38,27 @@ pub(crate) struct WorkFiles {
     pub dirs: PathBuf,
 }
 
+/// The work directory holds every scanned path in plain text, so it must not
+/// be group/world accessible. This also tightens directories left at 0775 by
+/// older builds.
+#[cfg(unix)]
+fn restrict_work_dir(directory: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(metadata) = fs::metadata(directory) {
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o700);
+        let _ = fs::set_permissions(directory, permissions);
+    }
+}
+
+#[cfg(not(unix))]
+fn restrict_work_dir(_directory: &Path) {}
+
 impl WorkFiles {
     pub fn new(db_path: &Path, session_id: &str) -> Result<Self, IndexError> {
         let directory = db_path.with_extension("work");
         fs::create_dir_all(&directory)?;
+        restrict_work_dir(&directory);
         Ok(Self {
             jsonl: directory.join(format!("{session_id}.jsonl")),
             dirs: directory.join(format!("{session_id}.dirs")),
