@@ -3,7 +3,9 @@ use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
-use walker_core::{normalize_name, scan, CaseSensitivity, ScanOptions, SkipKind};
+use walker_core::{
+    normalize_name, scan, scan_with_entries, CaseSensitivity, EntryKind, ScanOptions, SkipKind,
+};
 
 fn options(root: &Path) -> ScanOptions {
     ScanOptions {
@@ -267,4 +269,38 @@ fn report_serializes_to_stable_json_shape() {
     ] {
         assert!(json.contains(field), "missing {field} in {json}");
     }
+}
+
+#[test]
+fn scan_with_entries_emits_every_entry_and_listed_directories() {
+    let root = TempDir::new().expect("tempdir");
+    fs::create_dir_all(root.path().join("a/b")).expect("mkdir");
+    fs::write(root.path().join("a/b/file.txt"), b"data").expect("write");
+    fs::write(root.path().join("top.txt"), b"top").expect("write");
+
+    let outcome = scan_with_entries(&options(root.path()));
+    assert_eq!(outcome.report.summary.files, 2);
+    assert_eq!(outcome.report.summary.directories, 3);
+    assert_eq!(outcome.entries.len(), 5);
+    assert_eq!(
+        outcome
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == EntryKind::Directory)
+            .count(),
+        3
+    );
+
+    let file = outcome
+        .entries
+        .iter()
+        .find(|entry| entry.path.ends_with("file.txt"))
+        .expect("file entry");
+    assert_eq!(file.size, 4);
+    assert_eq!(file.file_type(), "file");
+    assert!(file.mtime_ns > 0);
+    assert!(file.inode > 0);
+
+    assert_eq!(outcome.listed_directories.len(), 3);
+    assert_eq!(scan(&options(root.path())).summary.files, 2);
 }

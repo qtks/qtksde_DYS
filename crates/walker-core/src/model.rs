@@ -1,7 +1,61 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 pub const SCHEMA_VERSION: &str = "panopticon.m0.scan.v1";
+
+/// Kind of a filesystem entry emitted for indexing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryKind {
+    File,
+    Directory,
+    Symlink,
+}
+
+impl EntryKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EntryKind::File => "file",
+            EntryKind::Directory => "dir",
+            EntryKind::Symlink => "symlink",
+        }
+    }
+}
+
+/// Lean per-entry record produced by `scan_with_entries`. Names, extension and
+/// NFC normalization are derived later from `path` via the core helpers so the
+/// in-memory footprint stays small for million-file scans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileEntry {
+    pub path: PathBuf,
+    pub kind: EntryKind,
+    pub size: u64,
+    /// Modification time in nanoseconds since the Unix epoch.
+    pub mtime_ns: i64,
+    pub inode: u64,
+    pub nlink: u64,
+}
+
+impl FileEntry {
+    pub fn is_dir(&self) -> bool {
+        self.kind == EntryKind::Directory
+    }
+
+    pub fn file_type(&self) -> &'static str {
+        self.kind.as_str()
+    }
+}
+
+/// Full result of an entry-collecting scan.
+#[derive(Debug, Clone)]
+pub struct ScanOutcome {
+    pub report: ScanReport,
+    pub entries: Vec<FileEntry>,
+    /// Directories whose listing completed without a walk error. Used by the
+    /// indexer to distinguish "deleted" from "could not be listed".
+    pub listed_directories: Vec<PathBuf>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

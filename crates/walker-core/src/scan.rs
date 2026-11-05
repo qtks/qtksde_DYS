@@ -11,9 +11,9 @@ use walkdir::{DirEntry, WalkDir};
 use crate::case;
 use crate::exclude::{ExcludeMatcher, DEFAULT_EXCLUDES};
 use crate::model::{
-    CaseProbe, Distributions, ExclusionReport, ExtensionBucket, HardlinkSummary, OptionsReport,
-    RootInfo, ScanReport, SizeBucket, SkipKind, SkippedItem, SkippedReport, Summary, Timings,
-    ToolInfo, SCHEMA_VERSION,
+    CaseProbe, Distributions, EntryKind, ExclusionReport, ExtensionBucket, FileEntry,
+    HardlinkSummary, OptionsReport, RootInfo, ScanOutcome, ScanReport, SizeBucket, SkipKind,
+    SkippedItem, SkippedReport, Summary, Timings, ToolInfo, SCHEMA_VERSION,
 };
 use crate::name::{extension_key, normalize_name};
 
@@ -61,6 +61,17 @@ impl Default for ScanOptions {
 /// Read-only scan. All IO errors are converted into report entries; the
 /// function does not panic on filesystem errors.
 pub fn scan(options: &ScanOptions) -> ScanReport {
+    scan_impl(options).report
+}
+
+/// Same traversal as [`scan`], additionally returning one lean record per
+/// entry so the indexer can persist filesystem metadata. `scan` stays
+/// allocation-light by discarding these records.
+pub fn scan_with_entries(options: &ScanOptions) -> ScanOutcome {
+    scan_impl(options)
+}
+
+fn scan_impl(options: &ScanOptions) -> ScanOutcome {
     let total_start = Instant::now();
 
     if let Some(threads) = options.threads.filter(|value| *value > 0) {
@@ -71,7 +82,7 @@ pub fn scan(options: &ScanOptions) -> ScanReport {
     scan_inner(options, total_start)
 }
 
-fn scan_inner(options: &ScanOptions, total_start: Instant) -> ScanReport {
+fn scan_inner(options: &ScanOptions, total_start: Instant) -> ScanOutcome {
     let setup_start = Instant::now();
 
     let mut patterns: Vec<String> = Vec::new();
@@ -141,6 +152,8 @@ fn scan_inner(options: &ScanOptions, total_start: Instant) -> ScanReport {
     let walk_ms = elapsed_ms(walk_start);
 
     let aggregate_start = Instant::now();
+    let entries = std::mem::take(&mut root_stats.entries);
+    let listed_directories = std::mem::take(&mut root_stats.listed_directories);
     let mut report = build_report(root_stats, roots, options, patterns, setup_ms, walk_ms);
     report.timings.aggregate_ms = elapsed_ms(aggregate_start);
     report.timings.total_wall_ms = elapsed_ms(total_start);
@@ -149,7 +162,11 @@ fn scan_inner(options: &ScanOptions, total_start: Instant) -> ScanReport {
     } else {
         report.summary.files as f64 / (report.timings.walk_ms as f64 / 1000.0)
     };
-    report
+    ScanOutcome {
+        report,
+        entries,
+        listed_directories,
+    }
 }
 
 fn build_report(
@@ -324,20 +341,26 @@ fn scan_children(context: &Context, directories: &[(PathBuf, bool)]) -> LocalSta
 fn scan_directory(context: &Context, directory: &Path, preclaimed: bool) -> LocalStats {
     let mut stats = LocalStats::default();
 
-    if !preclaimed {
-        let metadata = match fs::metadata(directory) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                stats.record_io_error(directory, &error, "dir_metadata");
-                return stats;
-            }
-        };
-        if !metadata.is_dir() || !context.claim_directory(inode_key(&metadata)) {
+    let metadata = match fs::metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            stats.record_io_error(directory, &error, "dir_metadata");
             return stats;
         }
+    };
+    if !metadata.is_dir() || (!preclaimed && !context.claim_directory(inode_key(&metadata))) {
+        return stats;
     }
 
+    // Emitted only for directories actually entered, so "listed" is truthful.
+    stats.entries.push(entry_from_metadata(
+        directory,
+        EntryKind::Directory,
+        &metadata,
+    ));
+
     let mut children: Vec<(PathBuf, bool)> = Vec::new();
+    let mut listing_complete = true;
 
     // One directory per walk; subdirectories are handed to rayon recursively.
     let walker = WalkDir::new(directory)
@@ -359,6 +382,19 @@ fn scan_directory(context: &Context, directory: &Path, preclaimed: bool) -> Loca
                     }
                 } else if file_type.is_symlink() {
                     stats.symlinks += 1;
+                    match entry.metadata() {
+                        Ok(target_metadata) => stats.entries.push(entry_from_metadata(
+                            entry.path(),
+                            EntryKind::Symlink,
+                            &target_metadata,
+                        )),
+                        Err(error) => match error.io_error() {
+                            Some(io_error) => {
+                                stats.record_io_error(entry.path(), io_error, "symlink_metadata")
+                            }
+                            None => stats.record_walkdir_error(entry.path(), &error),
+                        },
+                    }
                     if context.follow_links {
                         if let Some(child) = resolve_symlink_directory(context, &entry, &mut stats)
                         {
@@ -380,6 +416,7 @@ fn scan_directory(context: &Context, directory: &Path, preclaimed: bool) -> Loca
                 }
             }
             Err(error) => {
+                listing_complete = false;
                 let path = error
                     .path()
                     .map(Path::to_path_buf)
@@ -387,6 +424,10 @@ fn scan_directory(context: &Context, directory: &Path, preclaimed: bool) -> Loca
                 stats.record_walkdir_error(&path, &error);
             }
         }
+    }
+
+    if listing_complete {
+        stats.listed_directories.push(directory.to_path_buf());
     }
 
     let child_stats = scan_children(context, &children);
@@ -468,6 +509,8 @@ struct LocalStats {
     excluded_directories: u64,
     earliest_mtime: Option<i64>,
     latest_mtime: Option<i64>,
+    entries: Vec<FileEntry>,
+    listed_directories: Vec<PathBuf>,
 }
 
 impl LocalStats {
@@ -484,6 +527,8 @@ impl LocalStats {
         self.logical_bytes = self.logical_bytes.saturating_add(size);
         self.ext_files.entry(extension).or_default().add_file(size);
         self.buckets[size_bucket(size)].add_file(size);
+        self.entries
+            .push(entry_from_metadata(path, EntryKind::File, metadata));
 
         if metadata.nlink() > 1 {
             self.hardlinked_files += 1;
@@ -579,6 +624,8 @@ impl LocalStats {
             (Some(left), Some(right)) => Some(left.max(right)),
             (left, right) => left.or(right),
         };
+        self.entries.extend(other.entries);
+        self.listed_directories.extend(other.listed_directories);
     }
 }
 
@@ -590,6 +637,28 @@ fn size_bucket(size: u64) -> usize {
         value if value < 100 * 1024 * 1024 => 3,
         value if value < 1024 * 1024 * 1024 => 4,
         _ => 5,
+    }
+}
+
+fn entry_from_metadata(path: &Path, kind: EntryKind, metadata: &Metadata) -> FileEntry {
+    FileEntry {
+        path: path.to_path_buf(),
+        kind,
+        size: metadata.len(),
+        mtime_ns: unix_mtime_nanos(metadata),
+        inode: metadata.ino(),
+        nlink: metadata.nlink(),
+    }
+}
+
+fn unix_mtime_nanos(metadata: &Metadata) -> i64 {
+    let modified: SystemTime = match metadata.modified() {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
+    match modified.duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_nanos() as i64,
+        Err(error) => -(error.duration().as_nanos() as i64),
     }
 }
 

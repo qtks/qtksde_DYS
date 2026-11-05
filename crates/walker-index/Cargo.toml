@@ -1,0 +1,27 @@
+[package]
+name = "walker-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Panopticon M1 SQLite metadata index built on walker-core"
+
+[lib]
+name = "walker_index"
+path = "src/lib.rs"
+
+[[bin]]
+name = "walker-index"
+path = "src/main.rs"
+
+[dependencies]
+walker-core = { path = "../walker-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+rusqlite = { workspace = true }

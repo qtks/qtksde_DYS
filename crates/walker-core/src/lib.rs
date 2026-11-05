@@ -6,9 +6,9 @@ mod scan;
 
 pub use exclude::DEFAULT_EXCLUDES;
 pub use model::{
-    CaseProbe, CaseSensitivity, Distributions, ExclusionReport, ExtensionBucket, HardlinkSummary,
-    OptionsReport, RootInfo, ScanReport, SizeBucket, SkipKind, SkippedItem, SkippedReport, Summary,
-    Timings, ToolInfo, SCHEMA_VERSION,
+    CaseProbe, CaseSensitivity, Distributions, EntryKind, ExclusionReport, ExtensionBucket,
+    FileEntry, HardlinkSummary, OptionsReport, RootInfo, ScanOutcome, ScanReport, SizeBucket,
+    SkipKind, SkippedItem, SkippedReport, Summary, Timings, ToolInfo, SCHEMA_VERSION,
 };
-pub use name::normalize_name;
-pub use scan::{scan, ScanOptions};
+pub use name::{extension_of, normalize_name};
+pub use scan::{scan, scan_with_entries, ScanOptions};
