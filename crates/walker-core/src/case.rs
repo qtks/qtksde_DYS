@@ -1,8 +1,8 @@
 use std::fs;
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+use crate::fsmeta::{device_id, inode};
 use crate::model::{CaseProbe, CaseSensitivity};
 
 /// Detect case sensitivity without writing to the scanned directory.
@@ -43,8 +43,21 @@ fn probe_by_case_flip(root: &Path) -> Option<CaseProbe> {
         };
         match fs::symlink_metadata(&altered) {
             Ok(altered_meta) => {
-                let same = original_meta.dev() == altered_meta.dev()
-                    && original_meta.ino() == altered_meta.ino();
+                // Same device+inode means the filesystem treated the two
+                // names as the same entry (case-insensitive). When the
+                // platform cannot report an identity, fall through instead
+                // of guessing.
+                let same = match (
+                    device_id(&original_meta),
+                    device_id(&altered_meta),
+                    inode(&original_meta),
+                    inode(&altered_meta),
+                ) {
+                    (Some(o_dev), Some(a_dev), Some(o_ino), Some(a_ino)) => {
+                        o_dev == a_dev && o_ino == a_ino
+                    }
+                    _ => continue,
+                };
                 let sensitivity = if same {
                     CaseSensitivity::Insensitive
                 } else {

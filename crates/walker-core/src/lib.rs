@@ -1,10 +1,12 @@
 mod case;
 mod exclude;
+mod fsmeta;
 mod model;
 mod name;
 mod scan;
 
 pub use exclude::DEFAULT_EXCLUDES;
+pub use fsmeta::{device_id, inode, nlink};
 pub use model::{
     CaseProbe, CaseSensitivity, Distributions, EntryKind, ExclusionReport, ExtensionBucket,
     FileEntry, HardlinkSummary, OptionsReport, RootInfo, ScanOutcome, ScanReport, SizeBucket,

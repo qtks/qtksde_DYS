@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, Metadata};
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -10,6 +9,7 @@ use walkdir::{DirEntry, WalkDir};
 
 use crate::case;
 use crate::exclude::{ExcludeMatcher, DEFAULT_EXCLUDES};
+use crate::fsmeta::{device_id, inode, nlink};
 use crate::model::{
     CaseProbe, Distributions, EntryKind, ExclusionReport, ExtensionBucket, FileEntry,
     HardlinkSummary, OptionsReport, RootInfo, ScanOutcome, ScanReport, SizeBucket, SkipKind,
@@ -316,8 +316,8 @@ struct InodeKey {
 
 fn inode_key(metadata: &Metadata) -> InodeKey {
     InodeKey {
-        device: metadata.dev(),
-        inode: metadata.ino(),
+        device: device_id(metadata).unwrap_or(0),
+        inode: inode(metadata).unwrap_or(0),
     }
 }
 
@@ -530,7 +530,7 @@ impl LocalStats {
         self.entries
             .push(entry_from_metadata(path, EntryKind::File, metadata));
 
-        if metadata.nlink() > 1 {
+        if nlink(metadata) > 1 {
             self.hardlinked_files += 1;
             self.hardlinked_bytes_logical = self.hardlinked_bytes_logical.saturating_add(size);
             self.hardlink_inodes
@@ -646,8 +646,8 @@ fn entry_from_metadata(path: &Path, kind: EntryKind, metadata: &Metadata) -> Fil
         kind,
         size: metadata.len(),
         mtime_ns: unix_mtime_nanos(metadata),
-        inode: metadata.ino(),
-        nlink: metadata.nlink(),
+        inode: inode(metadata).unwrap_or(0),
+        nlink: nlink(metadata),
     }
 }
 

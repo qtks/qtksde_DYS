@@ -1,6 +1,7 @@
 use std::fs;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+
+use walker_core::device_id;
 
 use crate::db::IndexDb;
 use crate::error::IndexError;
@@ -22,7 +23,9 @@ pub fn probe_mount(path: &Path, expected_device: Option<u64>) -> MountProbe {
     match fs::metadata(path) {
         Err(_) => MountProbe::Missing,
         Ok(metadata) => match expected_device {
-            Some(expected) if metadata.dev() != expected => MountProbe::DeviceMismatch,
+            Some(expected) if device_id(&metadata).is_some_and(|actual| actual != expected) => {
+                MountProbe::DeviceMismatch
+            }
             _ => MountProbe::Mounted,
         },
     }

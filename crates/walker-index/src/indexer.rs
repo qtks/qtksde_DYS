@@ -37,12 +37,9 @@ pub fn index_root(options: &IndexOptions) -> Result<IndexOutcome, IndexError> {
     let canonical_root = fs::canonicalize(&options.root).unwrap_or_else(|_| options.root.clone());
     let root_path = canonical_root.to_string_lossy().into_owned();
 
-    let device = {
-        use std::os::unix::fs::MetadataExt;
-        fs::metadata(&canonical_root)
-            .ok()
-            .map(|metadata| metadata.dev())
-    };
+    let device = fs::metadata(&canonical_root)
+        .ok()
+        .and_then(|metadata| walker_core::device_id(&metadata));
 
     let mut db = IndexDb::open(&options.db_path)?;
     let now = now_iso8601();

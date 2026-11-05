@@ -1,3 +1,4 @@
+#![cfg(unix)]
 use std::fs;
 use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
