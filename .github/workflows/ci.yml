@@ -150,9 +150,12 @@ jobs:
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             # Annotations are readable without repo credentials, unlike the
-            # Actions log download API.
+            # Actions log download API. Errors first, then the tail.
             echo "::error::bundling failed with exit code $status"
-            tail -n 30 "$log" | while IFS= read -r line; do echo "::error::$line"; done
+            {
+              grep -a -E "error\[|error:" "$log" | head -n 8
+              tail -n 20 "$log"
+            } | while IFS= read -r line; do echo "::error::$line"; done
             exit "$status"
           fi
 
