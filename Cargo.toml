@@ -5,6 +5,7 @@ members = [
     "crates/walker-scan",
     "crates/walker-index",
     "crates/walker-query",
+    "crates/walker-ai",
 ]
 
 [workspace.package]

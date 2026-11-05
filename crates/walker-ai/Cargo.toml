@@ -1,0 +1,36 @@
+[package]
+name = "walker-ai"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Panopticon M3 local AI layer: project detection, embeddings, semantics, suggestions"
+
+[lib]
+name = "walker_ai"
+path = "src/lib.rs"
+
+[[bin]]
+name = "walker-ai"
+path = "src/main.rs"
+
+[dependencies]
+walker-core = { path = "../walker-core" }
+walker-index = { path = "../walker-index" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+blake3 = "1"
+rayon = { workspace = true }
+ureq = "3"
+# `download-binaries` fetches the ORT tarball from the vendor CDN at build
+# time. That CDN is unreachable in this sandbox (~2 KB/s), so the runtime is
+# loaded from the wheel-provided `libonnxruntime.so` (set ORT_DYLIB_PATH).
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "ndarray", "tracing", "load-dynamic", "api-31"] }
+tokenizers = "0.23"
+infer = "0.22"
+
+[dev-dependencies]
+tempfile = { workspace = true }
