@@ -4,8 +4,8 @@ use std::io::Write;
 use rusqlite::params;
 use walker_index::IndexDb;
 use walker_query::{
-    aggregate_dir_totals, child_rows, find_duplicates, fts_status, rebuild_fts, search,
-    treemap_rows, DuplicateOptions, PrefixMode, SearchKind, SearchOptions,
+    aggregate_dir_totals, child_rows, ensure_dir_totals, ensure_fts, find_duplicates, fts_status,
+    rebuild_fts, search, treemap_rows, DuplicateOptions, PrefixMode, SearchKind, SearchOptions,
 };
 
 fn setup() -> IndexDb {
@@ -236,6 +236,49 @@ fn fts_trigram_and_short_query_fallback() {
     assert!(status.stale);
     assert_eq!(status.indexed_rows, 3);
     assert_eq!(status.online_rows, 4);
+}
+
+/// Startup builds the FTS index when it is missing, then leaves it alone.
+#[test]
+fn ensure_fts_builds_the_index_on_first_use() {
+    let db = setup();
+    insert_file(
+        &db, "root", "v1", None, "v1", "/mnt/v1", true, 0, 1, "online", None,
+    );
+    insert_file(
+        &db,
+        "cn",
+        "v1",
+        Some("root"),
+        "年度报告-2026.txt",
+        "/mnt/v1/年度报告-2026.txt",
+        false,
+        10,
+        2,
+        "online",
+        None,
+    );
+    let conn = db.connection();
+
+    assert!(!fts_status(conn).unwrap().table_exists);
+    let report = ensure_fts(conn).unwrap().expect("index was missing");
+    assert_eq!(report.rows, 2);
+    assert!(!fts_status(conn).unwrap().stale);
+    assert!(ensure_fts(conn).unwrap().is_none());
+
+    // The Chinese query is served by the trigram index, not the LIKE fallback.
+    let hit = search(
+        conn,
+        &SearchOptions {
+            kind: SearchKind::Fts,
+            query: "年度报告".to_string(),
+            limit: 10,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(hit.strategy, "fts_trigram_unranked");
+    assert_eq!(hit.hits.len(), 1);
 }
 
 #[test]
@@ -489,4 +532,58 @@ fn treemap_works_after_migrating_an_m1_database() {
         .children
         .iter()
         .any(|child| child.path == "/mnt/v1/sub" && child.bytes == 100));
+}
+
+/// The server rebuilds `dir_totals` at startup when a CLI scan left it empty,
+/// and does not rebuild it again while the index is unchanged.
+#[test]
+fn ensure_dir_totals_is_automatic_and_idempotent() {
+    let db = setup();
+    insert_file(
+        &db, "root", "v1", None, "v1", "/mnt/v1", true, 0, 1, "online", None,
+    );
+    insert_file(
+        &db,
+        "f1",
+        "v1",
+        Some("root"),
+        "a.bin",
+        "/mnt/v1/a.bin",
+        false,
+        40,
+        2,
+        "online",
+        None,
+    );
+
+    let report = ensure_dir_totals(db.connection())
+        .expect("first build")
+        .expect("totals were missing");
+    assert_eq!(report.directories, 1);
+    assert_eq!(report.bytes_indexed, 40);
+    assert!(ensure_dir_totals(db.connection())
+        .expect("second pass")
+        .is_none());
+
+    // A later scan adds rows; the stored row count no longer matches.
+    insert_file(
+        &db,
+        "f2",
+        "v1",
+        Some("root"),
+        "b.bin",
+        "/mnt/v1/b.bin",
+        false,
+        60,
+        3,
+        "online",
+        None,
+    );
+    let report = ensure_dir_totals(db.connection())
+        .expect("rebuild after scan")
+        .expect("totals were stale");
+    assert_eq!(report.bytes_indexed, 100);
+    assert!(ensure_dir_totals(db.connection())
+        .expect("third pass")
+        .is_none());
 }

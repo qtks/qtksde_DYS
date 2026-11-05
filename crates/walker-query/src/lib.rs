@@ -7,11 +7,12 @@ mod treemap;
 pub use dedupe::{
     find_duplicates, DuplicateFile, DuplicateGroup, DuplicateOptions, DuplicateReport, FunnelStage,
 };
-pub use fts::{fts_status, rebuild_fts, FtsStatus, FTS_TABLE};
+pub use fts::{ensure_fts, fts_status, rebuild_fts, FtsStatus, FTS_TABLE};
 pub use http::{serve, HttpOptions};
 pub use search::{search, PrefixMode, SearchHit, SearchKind, SearchOptions, SearchResult};
 pub use treemap::{
-    aggregate_dir_totals, child_rows, treemap_rows, AggregateReport, ChildRow, TreemapRow,
+    aggregate_dir_totals, child_rows, ensure_dir_totals, treemap_rows, AggregateReport, ChildRow,
+    TreemapRow,
 };
 
 pub use walker_index::IndexError;

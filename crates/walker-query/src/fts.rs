@@ -93,6 +93,20 @@ pub fn fts_status(conn: &Connection) -> Result<FtsStatus> {
     })
 }
 
+/// Build the trigram index the first time it is needed, and after a scan that
+/// added rows. Without this, `/api/search?kind=fts` fails on a fresh index with
+/// "files_fts is missing", which surfaces in the UI as a raw HTTP 500.
+pub fn ensure_fts(conn: &Connection) -> Result<Option<FtsBuildReport>> {
+    let status = fts_status(conn)?;
+    if status.files_rows == 0 {
+        return Ok(None);
+    }
+    if status.table_exists && !status.stale {
+        return Ok(None);
+    }
+    rebuild_fts(conn).map(Some)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FtsBuildReport {
     pub table: &'static str,

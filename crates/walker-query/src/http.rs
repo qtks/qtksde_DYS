@@ -28,6 +28,28 @@ pub struct HttpOptions {
 pub fn serve(options: HttpOptions) -> Result<()> {
     let listener = TcpListener::bind(&options.addr)
         .map_err(|error| crate::IndexError::Config(format!("bind {}: {error}", options.addr)))?;
+    // A CLI scan does not maintain `dir_totals`, so the first window after a
+    // scan would show 0 B and an empty treemap. Build it once here; the scan
+    // path itself stays untouched. The listener is already bound, so the
+    // shell's readiness probe succeeds while this runs.
+    if let Ok(conn) = crate::open_write_connection(&options.db_path) {
+        match crate::treemap::ensure_dir_totals(&conn) {
+            Ok(Some(report)) => println!(
+                "walker-query: built dir totals for {} directories ({} files, {} bytes) in {} ms",
+                report.directories, report.online_files, report.bytes_indexed, report.total_ms
+            ),
+            Ok(None) => {}
+            Err(error) => eprintln!("walker-query: could not build dir totals: {error}"),
+        }
+        match crate::fts::ensure_fts(&conn) {
+            Ok(Some(report)) => println!(
+                "walker-query: built FTS index for {} rows in {} ms",
+                report.rows, report.build_ms
+            ),
+            Ok(None) => {}
+            Err(error) => eprintln!("walker-query: could not build FTS index: {error}"),
+        }
+    }
     let options = Arc::new(options);
     println!("walker-query listening on http://{}", options.addr);
     for stream in listener.incoming() {

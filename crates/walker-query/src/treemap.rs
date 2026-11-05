@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::Result;
@@ -152,6 +152,13 @@ pub fn aggregate_dir_totals(conn: &Connection) -> Result<AggregateReport> {
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         params![now],
     )?;
+    // Row count at build time lets startup detect a scan that ran afterwards.
+    let source_rows = dirs.len() as u64 + files_scanned;
+    transaction.execute(
+        "INSERT INTO meta(key, value) VALUES ('aggregate_source_rows', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![source_rows.to_string()],
+    )?;
     transaction.commit()?;
     let write_ms = write_started.elapsed().as_millis() as u64;
 
@@ -173,6 +180,33 @@ pub fn aggregate_dir_totals(conn: &Connection) -> Result<AggregateReport> {
         write_ms,
         total_ms: started.elapsed().as_millis() as u64,
     })
+}
+
+/// Rebuild `dir_totals` when it is missing or older than the current index.
+///
+/// `walker-index scan` leaves the summary table alone (see the note above), so
+/// a user who follows the first-run instructions would otherwise see a volume
+/// with `0 B / 0 files` and an empty treemap. The server calls this once at
+/// startup: after a scan and restart the totals are current, and repeated
+/// starts are a no-op because the indexed row count still matches.
+pub fn ensure_dir_totals(conn: &Connection) -> Result<Option<AggregateReport>> {
+    let entries: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
+    if entries == 0 {
+        return Ok(None);
+    }
+    let totals: i64 = conn.query_row("SELECT COUNT(*) FROM dir_totals", [], |row| row.get(0))?;
+    let built_rows: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key='aggregate_source_rows'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let current_rows = entries.to_string();
+    if totals > 0 && built_rows.as_deref() == Some(current_rows.as_str()) {
+        return Ok(None);
+    }
+    aggregate_dir_totals(conn).map(Some)
 }
 
 #[derive(Debug, Clone, Serialize)]
