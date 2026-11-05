@@ -255,7 +255,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: panopticon-${{ matrix.name }}
-          path: src-tauri/target/release/bundle
+          # Keep installers only: the deb staging directory holds control.tar.gz
+          # and data.tar.gz, and the AppImage AppDir is already inside the
+          # .AppImage. Both used to leak into the Release page.
+          path: |
+            src-tauri/target/release/bundle
+            !src-tauri/target/release/bundle/appimage/Panopticon.AppDir/**
+            !src-tauri/target/release/bundle/deb/*/control.tar.gz
+            !src-tauri/target/release/bundle/deb/*/data.tar.gz
           if-no-files-found: error
           retention-days: 14
 
@@ -286,6 +293,6 @@ jobs:
             artifacts/**/*.msi
             artifacts/**/*.exe
             artifacts/**/*.dmg
-            artifacts/**/*.tar.gz
+            artifacts/**/*.app.tar.gz
             artifacts/**/*.zip
             artifacts/**/*.sig
