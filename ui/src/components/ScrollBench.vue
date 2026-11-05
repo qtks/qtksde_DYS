@@ -26,6 +26,7 @@ const report = ref<{
   scroll_height: number
   warmup_worst_ms: number
   viewport: string
+  valid: boolean
 } | null>(null)
 
 onMounted(async () => {
@@ -92,6 +93,7 @@ async function start() {
       scroll_height: element ? element.scrollHeight : 0,
       warmup_worst_ms: Number(warmupWorst.toFixed(2)),
       viewport: elementSize(),
+      valid: finalFrames.length >= 300 && observedMax > 1000,
     }
     void save(samples, total, dropped, jank, avg, p95, worst)
     running.value = false
@@ -162,6 +164,7 @@ async function save(
     load_ms: Number(loadMs.value.toFixed(0)),
     max_scroll: report.value?.max_scroll,
     scroll_height: report.value?.scroll_height,
+    valid: report.value?.valid,
     viewport: elementSize(),
     window_size: `${window.innerWidth}x${window.innerHeight}`,
   }
@@ -196,6 +199,10 @@ function elementSize() {
     </header>
 
     <div v-if="report" class="bench-report">
+      <div v-if="!report.valid" class="error">
+        本次结果无效：rAF 被节流或列表未滚动（帧数 {{ report.frames }}，滚动
+        {{ report.max_scroll }} px），请在前台窗口重跑。
+      </div>
       <div><strong>{{ report.rows.toLocaleString() }}</strong> rows</div>
       <div><strong>{{ report.frames }}</strong> frames / {{ report.duration_ms.toFixed(0) }} ms</div>
       <div>avg <strong>{{ report.avg_frame_ms }} ms</strong>（{{ report.fps }} fps）</div>
