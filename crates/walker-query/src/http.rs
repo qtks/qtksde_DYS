@@ -485,4 +485,29 @@ mod tests {
             0
         );
     }
+
+    /// The v0.1.0 database is an M1 schema without `dir_totals`; opening it
+    /// must migrate in place so `/api/volumes` stops answering 500.
+    #[test]
+    fn volumes_payload_works_after_migrating_an_m1_database() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("index.db");
+        {
+            let conn = rusqlite::Connection::open(&path).expect("fixture");
+            conn.execute_batch(walker_index::SCHEMA_SQL)
+                .expect("m1 schema");
+            conn.execute(
+                "INSERT INTO meta(key, value) VALUES ('schema_version', 'panopticon.m1.index.v1')",
+                [],
+            )
+            .expect("meta row");
+        }
+        walker_index::IndexDb::open(&path).expect("migrate m1 database");
+        let conn = open_query_connection(&path).expect("open query connection");
+        let payload = volumes_payload(&conn).expect("volumes payload");
+        assert_eq!(
+            payload["volumes"].as_array().expect("volumes array").len(),
+            0
+        );
+    }
 }

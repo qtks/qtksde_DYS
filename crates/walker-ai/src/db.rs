@@ -9,55 +9,9 @@ use rusqlite::Connection;
 
 use crate::{IndexError, Result};
 
-pub const AI_SCHEMA_SQL: &str = r#"
-CREATE TABLE IF NOT EXISTS projects (
-    id         TEXT PRIMARY KEY,
-    volume_id  TEXT NOT NULL,
-    root_path  TEXT NOT NULL,
-    kind       TEXT NOT NULL,
-    markers    TEXT NOT NULL,
-    depth      INTEGER NOT NULL,
-    file_count INTEGER NOT NULL DEFAULT 0,
-    bytes      INTEGER NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL
-) WITHOUT ROWID;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_root ON projects(volume_id, root_path);
-
-CREATE TABLE IF NOT EXISTS vectors (
-    file_id      TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
-    shard        TEXT NOT NULL,
-    dim          INTEGER NOT NULL,
-    vec          BLOB NOT NULL,
-    content_hash TEXT NOT NULL,
-    mtime        INTEGER NOT NULL,
-    size         INTEGER NOT NULL,
-    model        TEXT NOT NULL,
-    updated_at   TEXT NOT NULL
-) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS idx_vectors_shard ON vectors(shard);
-
-CREATE TABLE IF NOT EXISTS vector_shards (
-    shard      TEXT PRIMARY KEY,
-    volume_id  TEXT NOT NULL,
-    top_dir    TEXT NOT NULL,
-    rows       INTEGER NOT NULL,
-    dim        INTEGER NOT NULL,
-    model      TEXT NOT NULL,
-    built_at   TEXT NOT NULL
-) WITHOUT ROWID;
-
-CREATE TABLE IF NOT EXISTS archive_suggestions (
-    id          TEXT PRIMARY KEY,
-    kind        TEXT NOT NULL,
-    action      TEXT NOT NULL,
-    paths       TEXT NOT NULL,
-    evidence    TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'pending',
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
-) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS idx_suggestions_status ON archive_suggestions(status, created_at);
-"#;
+/// Shared with `walker-index`, which owns the migration chain. Keeping one
+/// copy means `open_rw` and the schema migration can never disagree.
+pub const AI_SCHEMA_SQL: &str = walker_index::M3_SCHEMA_SQL;
 
 pub fn open_ro(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path)?;

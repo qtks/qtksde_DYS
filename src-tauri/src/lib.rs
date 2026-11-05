@@ -46,14 +46,17 @@ fn ui_dir(app: &tauri::App) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ui/dist"))
 }
 
-/// First launch: create the empty index schema so the UI can say "no volumes
-/// indexed yet" instead of failing on a missing database file.
+/// Open the index once at startup. This is deliberately unconditional: the
+/// schema migrations in `IndexDb::open` are what bring an existing M1 database
+/// (created by v0.1.0) up to the tables the UI queries. Skipping the open when
+/// the file merely exists is how the old build left users on
+/// "no such table: dir_totals".
 fn ensure_index(db: &Path) {
-    if db.is_file() {
-        return;
-    }
     if let Err(error) = walker_index::IndexDb::open(db) {
-        eprintln!("could not create {}: {error}", db.display());
+        eprintln!(
+            "could not migrate {}: {error}; index queries will fail until this is fixed",
+            db.display()
+        );
     }
 }
 

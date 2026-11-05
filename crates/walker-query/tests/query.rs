@@ -448,3 +448,45 @@ fn aggregate_and_treemap_sort_by_subtree_bytes() {
     assert_eq!(page.children.len(), 3);
     assert!(!page.truncated);
 }
+
+/// Opening a v0.1.0 (M1) database must leave the treemap usable: the
+/// aggregate step writes into `dir_totals`, which M1 did not have.
+#[test]
+fn treemap_works_after_migrating_an_m1_database() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let path = directory.path().join("index.db");
+    {
+        let conn = rusqlite::Connection::open(&path).expect("fixture");
+        conn.execute_batch(walker_index::SCHEMA_SQL)
+            .expect("m1 schema");
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES ('schema_version', 'panopticon.m1.index.v1')",
+            [],
+        )
+        .expect("meta row");
+    }
+
+    let db = IndexDb::open(&path).expect("migrate m1 database");
+    db.connection()
+        .execute_batch(
+            r#"
+            INSERT INTO volumes (id, name, mount_path, device, status, last_seen_at, created_at, updated_at)
+            VALUES ('v1', 'v1', '/mnt/v1', NULL, 'online', '2026-01-01', '2026-01-01', '2026-01-01');
+            INSERT INTO files (id, volume_id, parent_id, name, norm_name, path, is_dir, size, file_type,
+                               created_at, updated_at)
+            VALUES ('root', 'v1', NULL, 'v1', 'v1', '/mnt/v1', 1, 0, 'dir', '2026-01-01', '2026-01-01'),
+                   ('sub', 'v1', 'root', 'sub', 'sub', '/mnt/v1/sub', 1, 0, 'dir', '2026-01-01', '2026-01-01'),
+                   ('f1', 'v1', 'sub', 'f.bin', 'f.bin', '/mnt/v1/sub/f.bin', 0, 100, 'file',
+                    '2026-01-01', '2026-01-01');
+            "#,
+        )
+        .expect("rows");
+
+    aggregate_dir_totals(db.connection()).expect("aggregate after migration");
+    let root = treemap_rows(db.connection(), Some("/mnt/v1"), 10).expect("treemap after migration");
+    assert_eq!(root.bytes, 100);
+    assert!(root
+        .children
+        .iter()
+        .any(|child| child.path == "/mnt/v1/sub" && child.bytes == 100));
+}

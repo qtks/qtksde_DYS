@@ -80,7 +80,14 @@ CREATE TABLE IF NOT EXISTS scan_sessions (
 CREATE INDEX IF NOT EXISTS idx_scan_sessions_volume ON scan_sessions(volume_id, status);
 "#;
 
-/// Per-directory subtree totals read by the treemap and volume summary.
+/// Latest schema generation, tracked in `PRAGMA user_version`.
+///
+/// Existing databases are brought up to this version by [`migrate`] every time
+/// they are opened. Bump this and append a migration when adding tables.
+pub const SCHEMA_VERSION: u32 = 3;
+
+/// Version 2: per-directory subtree totals read by the treemap and volume
+/// summary.
 ///
 /// These rows are materialized by `walker-query aggregate`, but the table has
 /// to exist from the first launch: `/api/volumes` joins it, so a brand-new
@@ -95,7 +102,99 @@ CREATE TABLE IF NOT EXISTS dir_totals (
     dir_count  INTEGER NOT NULL,
     updated_at TEXT NOT NULL
 ) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_dir_totals_path ON dir_totals(path);
 "#;
+
+/// Version 3: M3 auxiliary tables (project detection, embeddings, suggestions).
+///
+/// `walker-ai` is the only writer, but the tables live in the shared index
+/// database and therefore belong to its migration chain.
+pub const M3_SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS projects (
+    id         TEXT PRIMARY KEY,
+    volume_id  TEXT NOT NULL,
+    root_path  TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    markers    TEXT NOT NULL,
+    depth      INTEGER NOT NULL,
+    file_count INTEGER NOT NULL DEFAULT 0,
+    bytes      INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_root ON projects(volume_id, root_path);
+
+CREATE TABLE IF NOT EXISTS vectors (
+    file_id      TEXT PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+    shard        TEXT NOT NULL,
+    dim          INTEGER NOT NULL,
+    vec          BLOB NOT NULL,
+    content_hash TEXT NOT NULL,
+    mtime        INTEGER NOT NULL,
+    size         INTEGER NOT NULL,
+    model        TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_vectors_shard ON vectors(shard);
+
+CREATE TABLE IF NOT EXISTS vector_shards (
+    shard      TEXT PRIMARY KEY,
+    volume_id  TEXT NOT NULL,
+    top_dir    TEXT NOT NULL,
+    rows       INTEGER NOT NULL,
+    dim        INTEGER NOT NULL,
+    model      TEXT NOT NULL,
+    built_at   TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS archive_suggestions (
+    id          TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    paths       TEXT NOT NULL,
+    evidence    TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_suggestions_status ON archive_suggestions(status, created_at);
+"#;
+
+/// Ordered, idempotent migrations. `CREATE ... IF NOT EXISTS` keeps each step
+/// safe to re-run on a database that already has the objects.
+const MIGRATIONS: &[(u32, &str)] = &[(2, DIR_TOTALS_SQL), (3, M3_SCHEMA_SQL)];
+
+/// Bring an existing database up to [`SCHEMA_VERSION`].
+///
+/// Runs on every open; `PRAGMA user_version` is the only state that matters, so
+/// the same steps are safe to repeat. Each step commits atomically and reports
+/// the target version on failure, which turns a bare SQLite error into
+/// something a user can act on.
+fn migrate(conn: &Connection) -> Result<(), IndexError> {
+    let current = conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
+    let current = current.max(0) as u32;
+    if current > SCHEMA_VERSION {
+        return Err(IndexError::Config(format!(
+            "database schema version {current} is newer than supported {SCHEMA_VERSION}; \
+             please upgrade Panopticon"
+        )));
+    }
+    for &(version, sql) in MIGRATIONS {
+        if version <= current {
+            continue;
+        }
+        let transaction = conn.unchecked_transaction()?;
+        transaction.execute_batch(sql).map_err(|error| {
+            IndexError::Config(format!("schema migration to v{version} failed: {error}"))
+        })?;
+        transaction
+            .pragma_update(None, "user_version", version as i64)
+            .map_err(|error| {
+                IndexError::Config(format!("could not record schema v{version}: {error}"))
+            })?;
+        transaction.commit()?;
+    }
+    Ok(())
+}
 
 pub struct IndexDb {
     conn: Connection,
@@ -144,7 +243,7 @@ impl IndexDb {
 
     fn init_schema(&self) -> Result<(), IndexError> {
         self.conn.execute_batch(SCHEMA_SQL)?;
-        self.conn.execute_batch(DIR_TOTALS_SQL)?;
+        migrate(&self.conn)?;
         self.conn.execute(
             "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
