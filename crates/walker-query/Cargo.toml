@@ -1,0 +1,27 @@
+[package]
+name = "walker-query"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Panopticon M2 query layer: search, duplicates, treemap, HTTP JSON"
+
+[lib]
+name = "walker_query"
+path = "src/lib.rs"
+
+[[bin]]
+name = "walker-query"
+path = "src/main.rs"
+
+[dependencies]
+walker-core = { path = "../walker-core" }
+walker-index = { path = "../walker-index" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { workspace = true }
+blake3 = "1"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

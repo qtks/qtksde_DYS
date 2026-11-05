@@ -1,0 +1,22 @@
+[package]
+name = "panopticon"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "Panopticon desktop shell (Tauri 2)"
+
+# This crate lives inside the walker workspace but is built independently:
+# `cargo test --workspace` must not try to link GTK/WebKit.
+[workspace]
+
+[lib]
+name = "panopticon_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+walker-query = { path = "../crates/walker-query" }

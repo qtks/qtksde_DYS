@@ -1,0 +1,1 @@
+{"root":["./src/api.ts","./src/main.ts","./src/squarify.ts","./src/App.vue","./src/components/DupPanel.vue","./src/components/FileList.vue","./src/components/ScrollBench.vue","./src/components/SearchPanel.vue","./src/components/TreePanel.vue","./src/components/TreemapPanel.vue"],"version":"5.9.3"}
