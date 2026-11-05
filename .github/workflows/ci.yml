@@ -126,13 +126,13 @@ jobs:
       - name: Build bundles
         shell: bash
         run: |
-          set -uo pipefail
+          # GitHub runs bash with -e; diagnostics must not abort the build.
+          set +e
           echo "runner=$(uname -a)"
-          node --version
-          npm --version
-          cargo --version
-          ./ui/node_modules/.bin/tauri --version
-          ls ui/dist/assets | head -5
+          node --version || true
+          npm --version || true
+          cargo --version || true
+          ./ui/node_modules/.bin/tauri --version || true
           log="$(mktemp)"
           args=(build --bundles "${{ matrix.bundles }}" --verbose)
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -n "${TAURI_UPDATER_PUBKEY:-}" ]; then
