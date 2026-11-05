@@ -128,13 +128,30 @@ jobs:
         run: |
           # GitHub runs bash with -e; diagnostics must not abort the build.
           set +e
+          log="${RUNNER_TEMP:-/tmp}/build.log"
+          status=0
+          # Annotations are readable without repo credentials, unlike the
+          # Actions log download API. GitHub keeps only ten annotations per
+          # step, so the whole excerpt goes into a single message.
+          report_failure() {
+            echo "::error::$1 failed with exit code $status"
+            tr '\r' '\n' < "$log" > "$log.clean"
+            {
+              grep -a -i -E "error|failed|failure|panicked|denied|no space|codesign|hdiutil|not found" "$log.clean" \
+                | grep -a -v -E "^ *Compiling |^ *Downloading " | tail -n 15
+              echo "-------- tail --------"
+              tail -n 50 "$log.clean"
+            } > "$log.diag"
+            echo "::error::$(tr '\n' '|' < "$log.diag" | cut -c1-3500)"
+          }
           echo "runner=$(uname -a)"
+          df -h . | tail -n 1 || true
           node --version || true
           npm --version || true
           cargo --version || true
           ./ui/node_modules/.bin/tauri --version || true
-          log="$(mktemp)"
-          args=(build --bundles "${{ matrix.bundles }}" --verbose)
+
+          args=(build)
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -n "${TAURI_UPDATER_PUBKEY:-}" ]; then
             echo "::notice::updater signing enabled"
             args+=(--config "{\"plugins\":{\"updater\":{\"pubkey\":\"${TAURI_UPDATER_PUBKEY}\"}},\"bundle\":{\"createUpdaterArtifacts\":true}}")
@@ -146,18 +163,51 @@ jobs:
           if [ -n "${WINDOWS_CERT_THUMBPRINT:-}" ]; then
             args+=(--config "{\"bundle\":{\"windows\":{\"certificateThumbprint\":\"${WINDOWS_CERT_THUMBPRINT}\",\"digestAlgorithm\":\"sha256\",\"timestampUrl\":\"http://timestamp.digicert.com\"}}}")
           fi
-          ./ui/node_modules/.bin/tauri "${args[@]}" 2>&1 | tee "$log"
+
+          # Split compile from bundling so a killed compiler is distinguishable
+          # from a failing installer step.
+          ./ui/node_modules/.bin/tauri "${args[@]}" --no-bundle --verbose 2>&1 | tee "$log"
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            # Annotations are readable without repo credentials, unlike the
-            # Actions log download API. Errors first, then the tail.
-            echo "::error::bundling failed with exit code $status"
-            {
-              grep -a -E "error\[|error:" "$log" | head -n 8
-              tail -n 20 "$log"
-            } | while IFS= read -r line; do echo "::error::$line"; done
+            report_failure compile
             exit "$status"
           fi
+
+          ./ui/node_modules/.bin/tauri "${args[@]}" --bundles "${{ matrix.bundles }}" --verbose 2>&1 | tee -a "$log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            report_failure bundle
+            exit "$status"
+          fi
+
+      - name: List bundles
+        shell: bash
+        run: |
+          dir=src-tauri/target/release/bundle
+          if [ ! -d "$dir" ]; then
+            echo "::error::$dir missing"
+            exit 1
+          fi
+          listing="$(find "$dir" -type f | while IFS= read -r f; do
+            printf '%s=%s bytes, ' "${f#"$dir"/}" "$(wc -c < "$f" | tr -d ' ')"
+          done)"
+          echo "::notice::bundles: $listing"
+          if [ "${{ matrix.name }}" = "linux-x64" ]; then
+            count="$(find "$dir" -type f -name '*.AppImage' | wc -l | tr -d ' ')"
+            echo "::notice::AppImage files: $count"
+            if [ "$count" -eq 0 ]; then
+              echo "::error::the appimage bundler produced no .AppImage file"
+              exit 1
+            fi
+          fi
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.name }}
+          path: ${{ runner.temp }}/*.log*
+          if-no-files-found: warn
 
       - name: Upload bundles
         uses: actions/upload-artifact@v4
