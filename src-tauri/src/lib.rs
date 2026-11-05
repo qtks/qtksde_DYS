@@ -57,8 +57,35 @@ fn ensure_index(db: &Path) {
     }
 }
 
+/// Loopback traffic must bypass any system HTTP proxy.
+///
+/// The window loads the UI from `http://127.0.0.1:<port>/`. WebKitGTK takes its
+/// proxy configuration from GNOME (and WebView2 from WinINet); when a proxy is
+/// configured, those loopback requests can be sent through it, and a proxy that
+/// is down or refuses loopback leaves the window completely white. Listing
+/// loopback in `no_proxy` makes GTK/WebKit talk to the local server directly.
+fn bypass_loopback_proxy() {
+    const LOOPBACK: [&str; 3] = ["127.0.0.1", "localhost", "::1"];
+    for key in ["no_proxy", "NO_PROXY"] {
+        let existing = std::env::var(key).unwrap_or_default();
+        let mut parts: Vec<String> = existing
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect();
+        for host in LOOPBACK {
+            if !parts.iter().any(|part| part == host) {
+                parts.push(host.to_string());
+            }
+        }
+        std::env::set_var(key, parts.join(","));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    bypass_loopback_proxy();
     tauri::Builder::default()
         .setup(|app| {
             let db = backend_db();

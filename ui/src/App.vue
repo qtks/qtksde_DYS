@@ -17,6 +17,7 @@ const rootPath = ref<string>('')
 const selectedPath = ref<string | null>(null)
 const tab = ref<'browse' | 'duplicates'>('browse')
 const error = ref<string | null>(null)
+const errorDetail = ref<string | null>(null)
 
 const activeVolume = computed(() => volumes.value.find((volume) => volume.id === activeVolumeId.value))
 
@@ -31,7 +32,10 @@ async function loadVolumes() {
       selectedPath.value = first.mount_path
     }
   } catch (reason) {
-    error.value = String(reason)
+    // Plain language first, raw detail second: the user should not have to
+    // parse an exception to know what to do next.
+    error.value = '索引服务未响应，请重试。'
+    errorDetail.value = String(reason)
   }
 }
 
@@ -76,7 +80,10 @@ onMounted(loadVolumes)
       <a class="bench-link" href="?bench=scroll&rows=500000">50 万行滚动实测 →</a>
     </header>
 
-    <p v-if="error" class="error top-error">{{ error }}</p>
+    <div v-if="error" class="error top-error" role="alert">
+      <strong>{{ error }}</strong>
+      <small v-if="errorDetail">（技术细节：{{ errorDetail }}）</small>
+    </div>
 
     <main class="layout">
       <SearchPanel class="column left" />

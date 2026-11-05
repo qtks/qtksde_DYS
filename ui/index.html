@@ -3,10 +3,56 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Panopticon M2</title>
+    <title>Panopticon</title>
   </head>
   <body>
     <div id="app"></div>
+    <script>
+      // Never leave the user with a blank window: this runs before any module,
+      // so it also catches import-time failures. The message is deliberately
+      // one sentence of plain language.
+      (function () {
+        var shown = false
+        function fail(message) {
+          if (shown) return
+          shown = true
+          var box = document.getElementById('boot-error')
+          if (!box) {
+            box = document.createElement('div')
+            box.id = 'boot-error'
+            box.setAttribute('role', 'alert')
+            box.style.cssText =
+              'margin:12% auto;max-width:640px;padding:20px 24px;border:1px solid #d9534f;' +
+              'border-radius:8px;background:#fff5f5;color:#7a1c1c;font:15px/1.6 system-ui,sans-serif;'
+            ;(document.getElementById('app') || document.body).appendChild(box)
+          }
+          box.textContent = message
+        }
+        window.addEventListener(
+          'error',
+          function (event) {
+            var target = event.target
+            if (target && (target.src || target.href)) {
+              fail('界面资源加载失败：' + (target.src || target.href) + '，请重新安装或反馈。')
+            } else {
+              var where = event.filename ? '（' + event.filename + ':' + event.lineno + '）' : ''
+              fail('界面脚本出错：' + (event.message || '未知错误') + where)
+            }
+          },
+          true,
+        )
+        window.addEventListener('unhandledrejection', function (event) {
+          var reason = event.reason && event.reason.message ? event.reason.message : event.reason
+          fail('界面脚本出错：' + reason)
+        })
+        window.setTimeout(function () {
+          var app = document.getElementById('app')
+          if (!app || app.childElementCount === 0) {
+            fail('界面未能启动（脚本或资源加载失败）。请重试；若持续失败，请把此窗口截图反馈。')
+          }
+        }, 4000)
+      })()
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

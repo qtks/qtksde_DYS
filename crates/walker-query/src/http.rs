@@ -465,3 +465,24 @@ fn status_text(status: u16) -> &'static str {
         _ => "OK",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A first launch has an empty index and no aggregate run yet. `/api/volumes`
+    /// joins `dir_totals`, so the table must exist as soon as the schema is
+    /// created - otherwise the UI opens on "no such table: dir_totals".
+    #[test]
+    fn volumes_payload_works_on_a_fresh_index() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("index.db");
+        walker_index::IndexDb::open(&path).expect("schema");
+        let conn = open_query_connection(&path).expect("open query connection");
+        let payload = volumes_payload(&conn).expect("volumes payload");
+        assert_eq!(
+            payload["volumes"].as_array().expect("volumes array").len(),
+            0
+        );
+    }
+}

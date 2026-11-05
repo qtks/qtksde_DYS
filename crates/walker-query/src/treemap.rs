@@ -16,16 +16,9 @@ pub(crate) fn now_iso8601() -> String {
     format!("{seconds}")
 }
 
-const DIR_TOTALS_SQL: &str = r#"
-CREATE TABLE IF NOT EXISTS dir_totals (
-    dir_id     TEXT PRIMARY KEY,
-    path       TEXT NOT NULL,
-    bytes      INTEGER NOT NULL,
-    file_count INTEGER NOT NULL,
-    dir_count  INTEGER NOT NULL,
-    updated_at TEXT NOT NULL
-) WITHOUT ROWID;
-"#;
+/// Shared with `walker-index` so a freshly created database already has the
+/// table `/api/volumes` joins.
+const DIR_TOTALS_SQL: &str = walker_index::DIR_TOTALS_SQL;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AggregateReport {

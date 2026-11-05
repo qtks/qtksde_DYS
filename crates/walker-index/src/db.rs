@@ -80,6 +80,23 @@ CREATE TABLE IF NOT EXISTS scan_sessions (
 CREATE INDEX IF NOT EXISTS idx_scan_sessions_volume ON scan_sessions(volume_id, status);
 "#;
 
+/// Per-directory subtree totals read by the treemap and volume summary.
+///
+/// These rows are materialized by `walker-query aggregate`, but the table has
+/// to exist from the first launch: `/api/volumes` joins it, so a brand-new
+/// index would otherwise answer 500 with "no such table: dir_totals" before
+/// anyone ran the aggregate step.
+pub const DIR_TOTALS_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS dir_totals (
+    dir_id     TEXT PRIMARY KEY,
+    path       TEXT NOT NULL,
+    bytes      INTEGER NOT NULL,
+    file_count INTEGER NOT NULL,
+    dir_count  INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+) WITHOUT ROWID;
+"#;
+
 pub struct IndexDb {
     conn: Connection,
 }
@@ -127,6 +144,7 @@ impl IndexDb {
 
     fn init_schema(&self) -> Result<(), IndexError> {
         self.conn.execute_batch(SCHEMA_SQL)?;
+        self.conn.execute_batch(DIR_TOTALS_SQL)?;
         self.conn.execute(
             "INSERT INTO meta(key, value) VALUES ('schema_version', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
