@@ -49,13 +49,27 @@ CI 只有在检测到对应 secret 时才执行签名步骤，否则构建仍然
 | --- | --- |
 | `TAURI_SIGNING_PRIVATE_KEY` | `tauri signer generate` 生成的私钥全文（多行） |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 生成时设置的密码；未设密码可留空 |
+| `TAURI_UPDATER_PUBKEY` | 同名 `.pub` 文件的内容；`createUpdaterArtifacts` 必须有它 |
 
-检测到私钥时 CI 会追加 `--config '{"bundle":{"createUpdaterArtifacts":true}}'`，产物旁出现 `.sig`。后续启用自动更新还需要在 `tauri.conf.json` 的 `plugins.updater` 里配置公钥与 endpoint。
+私钥与公钥**同时存在**时 CI 才会追加
+`--config '{"plugins":{"updater":{"pubkey":"..."}},"bundle":{"createUpdaterArtifacts":true}}'`，
+产物旁出现 `.sig`。只配置私钥会给出 warning 并跳过签名，安装包仍会生成。
+后续启用自动更新还需要把 endpoint 写进 `plugins.updater`。
 
-生成密钥（只做一次，私钥务必离线备份）：
+生成密钥（只做一次，私钥务必离线备份，`.pub` 内容填入 secret）：
 
 ```bash
 ./ui/node_modules/.bin/tauri signer generate -w ~/.tauri/panopticon.key
+cat ~/.tauri/panopticon.key.pub
+```
+
+本地验证（使用临时密钥，产物应出现 `.deb.sig`）：
+
+```bash
+TAURI_SIGNING_PRIVATE_KEY="$(cat /tmp/pan.key)" \
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD=pw \
+./ui/node_modules/.bin/tauri build --bundles deb \
+  --config /tmp/updater.json   # {"plugins":{"updater":{"pubkey":"..."}},"bundle":{"createUpdaterArtifacts":true}}
 ```
 
 ### 4.2 Windows 代码签名

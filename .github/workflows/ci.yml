@@ -70,6 +70,9 @@ jobs:
       # build still succeeds with unsigned installers. See docs/release.md.
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # createUpdaterArtifacts requires plugins.updater.pubkey; both must be
+      # present or the updater signature step is skipped.
+      TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
       WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
@@ -123,18 +126,35 @@ jobs:
       - name: Build bundles
         shell: bash
         run: |
-          set -euo pipefail
-          args=(build --bundles "${{ matrix.bundles }}")
-          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            echo "::notice::TAURI_SIGNING_PRIVATE_KEY present - enabling updater artifacts"
-            args+=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
+          set -uo pipefail
+          echo "runner=$(uname -a)"
+          node --version
+          npm --version
+          cargo --version
+          ./ui/node_modules/.bin/tauri --version
+          ls ui/dist/assets | head -5
+          log="$(mktemp)"
+          args=(build --bundles "${{ matrix.bundles }}" --verbose)
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -n "${TAURI_UPDATER_PUBKEY:-}" ]; then
+            echo "::notice::updater signing enabled"
+            args+=(--config "{\"plugins\":{\"updater\":{\"pubkey\":\"${TAURI_UPDATER_PUBKEY}\"}},\"bundle\":{\"createUpdaterArtifacts\":true}}")
+          elif [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY set without TAURI_UPDATER_PUBKEY - skipping updater signatures"
           else
             echo "::notice::no TAURI_SIGNING_PRIVATE_KEY - building unsigned installers"
           fi
           if [ -n "${WINDOWS_CERT_THUMBPRINT:-}" ]; then
             args+=(--config "{\"bundle\":{\"windows\":{\"certificateThumbprint\":\"${WINDOWS_CERT_THUMBPRINT}\",\"digestAlgorithm\":\"sha256\",\"timestampUrl\":\"http://timestamp.digicert.com\"}}}")
           fi
-          ./ui/node_modules/.bin/tauri "${args[@]}"
+          ./ui/node_modules/.bin/tauri "${args[@]}" 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # Annotations are readable without repo credentials, unlike the
+            # Actions log download API.
+            echo "::error::bundling failed with exit code $status"
+            tail -n 30 "$log" | while IFS= read -r line; do echo "::error::$line"; done
+            exit "$status"
+          fi
 
       - name: Upload bundles
         uses: actions/upload-artifact@v4
