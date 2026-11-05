@@ -151,6 +151,19 @@ jobs:
           cargo --version || true
           ./ui/node_modules/.bin/tauri --version || true
 
+          # Missing secrets arrive as empty strings, and Tauri treats an empty
+          # APPLE_CERTIFICATE as "sign here", which fails on a blank .p12.
+          # Remove empty values so unsigned builds really skip signing.
+          for v in TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+                   TAURI_UPDATER_PUBKEY WINDOWS_CERTIFICATE_BASE64 \
+                   WINDOWS_CERTIFICATE_PASSWORD APPLE_CERTIFICATE \
+                   APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+                   APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!v:-}" ]; then
+              unset "$v"
+            fi
+          done
+
           args=(build)
           if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -n "${TAURI_UPDATER_PUBKEY:-}" ]; then
             echo "::notice::updater signing enabled"
@@ -188,10 +201,28 @@ jobs:
             echo "::error::$dir missing"
             exit 1
           fi
-          listing="$(find "$dir" -type f | while IFS= read -r f; do
+          listing="$(find "$dir" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
+            -o -name '*.dmg' -o -name '*.msi' -o -name '*.exe' -o -name '*.sig' \) | while IFS= read -r f; do
             printf '%s=%s bytes, ' "${f#"$dir"/}" "$(wc -c < "$f" | tr -d ' ')"
           done)"
           echo "::notice::bundles: $listing"
+
+          # Each platform must produce at least one installer of the expected
+          # kind; this is the check that proves the bundler really ran.
+          case "${{ matrix.name }}" in
+            linux-x64) want='*.deb' ;;
+            windows-x64) want='*.msi' ;;
+            macos-*) want='*.dmg' ;;
+            *) want='' ;;
+          esac
+          if [ -n "$want" ]; then
+            count="$(find "$dir" -type f -name "$want" | wc -l | tr -d ' ')"
+            echo "::notice::${{ matrix.name }} $want files: $count"
+            if [ "$count" -eq 0 ]; then
+              echo "::error::${{ matrix.name }} produced no $want"
+              exit 1
+            fi
+          fi
           if [ "${{ matrix.name }}" = "linux-x64" ]; then
             count="$(find "$dir" -type f -name '*.AppImage' | wc -l | tr -d ' ')"
             echo "::notice::AppImage files: $count"
